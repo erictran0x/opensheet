@@ -37,36 +37,9 @@ async function handleRequest(event) {
 
   sheet = decodeURIComponent(sheet.replace(/\+/g, " "));
 
-  if (!isNaN(sheet)) {
-    if (parseInt(sheet) === 0) {
-      return error("For this API, sheet numbers start at 1");
-    }
-
-    const sheetData = await (
-      await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${id}?key=${GOOGLE_API_KEY}`
-      )
-    ).json();
-
-    if (sheetData.error) {
-      return error(sheetData.error.message);
-    }
-
-    const sheetIndex = parseInt(sheet) - 1;
-    const sheetWithThisIndex = sheetData.sheets[sheetIndex];
-
-    if (!sheetWithThisIndex) {
-      return error(`There is no sheet number ${sheet}`);
-    }
-
-    sheet = sheetWithThisIndex.properties.title;
-  }
-
   const result = await (
     await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(
-        sheet
-      )}?key=${GOOGLE_API_KEY}`
+      `https://sheets.googleapis.com/v4/spreadsheets/${id}/?key=${GOOGLE_API_KEY}&ranges=${encodeURIComponent(sheet)}&fields=sheets.data.rowData.values(userEnteredValue,hyperlink)`
     )
   ).json();
 
@@ -74,19 +47,32 @@ async function handleRequest(event) {
     return error(result.error.message);
   }
 
+  const rowData = result.sheets?.[0]?.data?.[0]?.rowData || [];
+  if (rowData.length === 0) {
+    return error("No data found in the specified sheet.");
+  }
   const rows = [];
-
-  const rawRows = result.values || [];
-  const headers = rawRows.shift();
-
-  rawRows.forEach((row) => {
-    const rowData = {};
-    row.forEach((item, index) => {
-      rowData[headers[index]] = item;
+  rowData.forEach((row) => {
+    row = row.values;
+    row = row.map((cell) => {
+      const value = cell.userEnteredValue;
+      if (!value) return cell;
+      let actualValue = undefined;
+      if (value.stringValue !== undefined) {
+        actualValue = value.stringValue;
+      } else if (value.numberValue !== undefined) {
+        actualValue = value.numberValue;
+      } else if (value.boolValue !== undefined) {
+        actualValue = value.boolValue;
+      } else if (value.formulaValue !== undefined) {
+        actualValue = value.formulaValue;
+      }
+      cell.value = actualValue;
+      delete cell.userEnteredValue;
+      return cell;
     });
-    rows.push(rowData);
+    rows.push(row);
   });
-
   const apiResponse = new Response(JSON.stringify(rows), {
     headers: {
       "Content-Type": "application/json",
